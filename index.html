@@ -1,0 +1,848 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>臨床手部復健追蹤系統 (自動分流防盜版)</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection@2.0.1/dist/hand-pose-detection.min.js"></script>
+
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: #0f172a;
+            color: #f8fafc;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 10px;
+            margin: 0;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        h1 { margin: 15px 0 2px 0; font-size: 1.4rem; text-align: center;}
+        
+        .version-tag {
+            font-size: 0.8rem;
+            color: #64748b;
+            margin-bottom: 15px;
+            font-family: monospace;
+        }
+
+        .security-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(15, 23, 42, 0.98);
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            gap: 15px;
+            text-align: center;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        
+        .control-panel {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+            background: #1e293b;
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid #334155;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+            max-width: 640px;
+            box-sizing: border-box;
+            width: 100%;
+        }
+        
+        button, select {
+            color: white;
+            border: none;
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background 0.2s, transform 0.1s;
+            background: #475569;
+        }
+        select { outline: none; }
+        button:active { transform: scale(0.95); }
+        
+        .calib-btn { background: #d97706; }
+        .confirm-btn { background: #059669; }
+        .play-btn { background: #2563eb; }
+        .replay-btn { background: #7c3aed; }
+        .pause-btn { background: #64748b; }
+        .reset-btn { background: #dc2626; }
+        
+        .container {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            aspect-ratio: 4/3;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            background: #000;
+        }
+        
+        video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            transform: scaleX(-1);
+            object-fit: cover;
+            z-index: 1;
+            filter: blur(12px) brightness(0.65);
+        }
+        
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            pointer-events: none;
+        }
+        .dashboard {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+            background: #1e293b;
+            padding: 12px;
+            border-radius: 8px;
+            width: 100%;
+            max-width: 640px;
+            justify-content: space-between;
+            border: 1px solid #334155;
+            box-sizing: border-box;
+        }
+        .joint-readouts {
+            display: flex;
+            gap: 15px;
+            background: #1e293b;
+            padding: 10px;
+            border-radius: 8px;
+            margin-top: 10px;
+            width: 100%;
+            max-width: 640px;
+            justify-content: space-around;
+            border: 1px solid #334155;
+            font-size: 0.9rem;
+            box-sizing: border-box;
+        }
+        .joint-val { font-weight: bold; color: #3b82f6; }
+        .stat-box { text-align: center; flex: 1; }
+        .stat-label { font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }
+        .stat-value { font-size: 1.4rem; font-weight: bold; margin-top: 2px; }
+        
+        .status-banner {
+            width: 100%;
+            max-width: 640px;
+            padding: 10px;
+            text-align: center;
+            font-weight: bold;
+            font-size: 1rem;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            background: #334155;
+            box-sizing: border-box;
+        }
+        .success { background: #16a34a !important; color: white; }
+        .warning { background: #b45309 !important; color: white; }
+        .complete-screen { background: #2563eb !important; color: white; }
+    </style>
+</head>
+<body>
+
+    <h1>臨床手部復健與角度追蹤系統</h1>
+    <div class="version-tag">05-07-2026 Core Build (Auto Multi-Tenant Lock)</div>
+
+    <div class="control-panel">
+        <button id="calibExtBtn" class="calib-btn">📏 記錄完全伸展</button>
+        <button id="confirmExtBtn" class="confirm-btn">✓ 確認伸展基準</button>
+        <button id="calibFlexBtn" class="calib-btn">📏 記錄完全握拳</button>
+        <button id="confirmFlexBtn" class="confirm-btn">✓ 確認握拳基準</button>
+        
+        <select id="holdSelect">
+            <option value="0">動態模式 (0秒維持)</option>
+            <option value="3">持續模式 (3秒維持)</option>
+            <option value="5" selected>持續模式 (5秒維持)</option>
+            <option value="10">持續模式 (10秒維持)</option>
+        </select>
+
+        <select id="durationSelect">
+            <option value="180">3 分鐘</option>
+            <option value="300" selected>5 分鐘</option>
+            <option value="600">10 分鐘</option>
+            <option value="900">15 分鐘</option>
+            <option value="30">30 秒 (測試)</option>
+        </select>
+        
+        <button id="playBtn" class="play-btn">▶ 開始復健</button>
+        <button id="replayBtn" class="replay-btn">🔄 重新挑戰</button>
+        <button id="pauseBtn" class="pause-btn" style="display:none;">⏸ 暫停</button>
+        <button id="resetBtn" class="reset-btn">🛑 重設清除</button>
+    </div>
+
+    <div id="statusBanner" class="status-banner">安全性校驗中...</div>
+
+    <div class="container">
+        <!-- Hardware Coupling/Anti-Share Overlay -->
+        <div id="lockOverlay" class="security-overlay">
+            <div id="lockUIContent">
+                <h3 style="margin:0; color:#f1f5f9;">🔒 臨床設備鎖定中</h3>
+                <p id="lockOverlayMessage" style="margin:5px 0 15px 0; font-size:0.85rem; color:#94a3b8;">正在為您初始化專屬醫療開通程序...</p>
+            </div>
+            <div id="lockErrorMsg" style="color:#ef4444; font-size:0.9rem; font-weight:bold; margin-top:10px;"></div>
+        </div>
+
+        <video id="video" autoplay playsinline muted autocomplete="off"></video>
+        <canvas id="output"></canvas>
+    </div>
+
+    <div class="joint-readouts">
+        <div>掌指關節 MCPJ (指根): <span id="mcpVal" class="joint-val">0°</span></div>
+        <div>近端指間關節 PIPJ (中節): <span id="pipVal" class="joint-val">0°</span></div>
+    </div>
+
+    <div class="dashboard">
+        <div class="stat-box">
+            <div class="stat-label">剩餘時間</div>
+            <div id="timerDisplay" class="stat-value" style="color: #f59e0b;">05:00</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-label">當前目標動作</div>
+            <div id="phaseDisplay" class="stat-value" style="color: #94a3b8;">--</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-label">已完成次數</div>
+            <div id="repCountDisplay" class="stat-value" style="color: #10b981;">0</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-label">復健結果</div>
+            <div id="outcomeDisplay" class="stat-value" style="color: #94a3b8;">等待中</div>
+        </div>
+    </div>
+
+    <script>
+        // =========================================================================
+        // 安全防護與自動路由設定區
+        // =========================================================================
+        // 1. 🔒 官方授權獨佔網域
+        const AUTHORIZED_HOST = "ottli2026.github.io"; 
+
+        // 2. 物理域名自殺鎖
+        if (!window.location.hostname.includes(AUTHORIZED_HOST) && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
+            document.body.innerHTML = "<div style='padding:50px; text-align:center; color:#ef4444;'><h2>❌ 未授權的盜版醫療站台</h2><p>此處方系統原始碼已被鎖定保護，無法在非官方授權網域下運行。</p></div>";
+            throw new Error("Unauthorized domain deployment.");
+        }
+
+        // 3. 反除錯防抄襲機制
+        setInterval(function() { debugger; }, 100);
+
+        let isSystemUnlocked = false;
+
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('output');
+        const ctx = canvas.getContext('2d');
+        
+        const lockOverlay = document.getElementById('lockOverlay');
+        const lockOverlayMessage = document.getElementById('lockOverlayMessage');
+        const lockErrorMsg = document.getElementById('lockErrorMsg');
+        
+        const calibExtBtn = document.getElementById('calibExtBtn');
+        const confirmExtBtn = document.getElementById('confirmExtBtn');
+        const calibFlexBtn = document.getElementById('calibFlexBtn');
+        const confirmFlexBtn = document.getElementById('confirmFlexBtn');
+        const holdSelect = document.getElementById('holdSelect');
+        const durationSelect = document.getElementById('durationSelect');
+        const playBtn = document.getElementById('playBtn');
+        const replayBtn = document.getElementById('replayBtn');
+        const pauseBtn = document.getElementById('pauseBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        
+        const timerDisplay = document.getElementById('timerDisplay');
+        const phaseDisplay = document.getElementById('phaseDisplay');
+        const repCountDisplay = document.getElementById('repCountDisplay');
+        const outcomeDisplay = document.getElementById('outcomeDisplay');
+        const statusBanner = document.getElementById('statusBanner');
+        
+        const mcpVal = document.getElementById('mcpVal');
+        const pipVal = document.getElementById('pipVal');
+
+        let tempExtension = 0;
+        let tempFlexion = 60;
+        let calibratedExtension = null;   
+        let calibratedFlexion = null;      
+
+        let smoothedPIP = 0;
+        let smoothedMCP = 0;
+        const SMOOTH_ALPHA = 0.35; 
+
+        let completedReps = 0;
+        let exercisePhase = "flexion"; 
+        let isTrialRunning = false;
+        let isPaused = false;
+        let trialFinished = false;
+
+        let holdStartTime = null;
+        let holdDurationRequirement = 5; 
+
+        let totalSecondsRemaining = 300; 
+        let countdownInterval = null;
+        const TOLERANCE_DEGS = 8; 
+        let detector = null;
+
+        if (durationSelect) totalSecondsRemaining = parseInt(durationSelect.value) || 300;
+        if (holdSelect) holdDurationRequirement = parseInt(holdSelect.value) || 5;
+        updateTimerDisplay();
+
+        // --- 核心：前端自動生成隨機密鑰 + 裝置鎖定引擎 ---
+        function verifyDeviceAuthorization() {
+            const urlParams = new URLSearchParams(window.location.search);
+            let roomId = urlParams.get('id');
+
+            // 1. 如果治療師給的是沒有參數的原網址，自動誕生一個全新的密鑰，並悄悄重導向
+            if (!roomId) {
+                const randomId = 'room_' + Math.random().toString(36).substring(2, 10);
+                urlParams.set('id', randomId);
+                const newUrl = window.location.pathname + '?' + urlParams.toString();
+                
+                // 本地裝置直接標記為合法擁有者
+                localStorage.setItem(`rehab_owner_${randomId}`, 'true');
+                sessionStorage.setItem(`rehab_session_${randomId}`, 'active');
+                
+                window.location.replace(newUrl);
+                return false;
+            }
+
+            // 2. 當網址帶有密鑰時，檢查這台手機是不是它的「首位擁有者」
+            const isLocalOwner = localStorage.getItem(`rehab_owner_${roomId}`);
+            const hasActiveSession = sessionStorage.getItem(`rehab_session_${roomId}`);
+
+            if (!isLocalOwner && document.referrer === "") {
+                // 如果是新裝置點開別人轉傳的連結，直接觸發佔用機制
+                localStorage.setItem(`rehab_occupied_${roomId}`, 'true');
+            }
+
+            const isOccupiedByOthers = localStorage.getItem(`rehab_occupied_${roomId}`);
+
+            if (isOccupiedByOthers === 'true' && !isLocalOwner) {
+                lockOverlayMessage.innerText = "隱私防護生效中";
+                lockErrorMsg.innerHTML = `❌ 安全錯誤：此處方連結已被其他裝置佔用綁定。<br><span style='font-size:0.8rem; color:#64748b; font-weight:normal;'>本連結已對應首台認證裝置。請重新點擊治療師提供的初始網址。</span>`;
+                statusBanner.innerText = "安全性錯誤：連結已被佔用。";
+                statusBanner.className = "status-banner warning";
+                return false;
+            }
+
+            // 第一次開通此帶 ID 網址，將其鎖定給當前裝置
+            if (!isLocalOwner) {
+                localStorage.setItem(`rehab_owner_${roomId}`, 'true');
+                sessionStorage.setItem(`rehab_session_${roomId}`, 'active');
+            }
+            
+            bypassLockAndRun();
+            return true;
+        }
+
+        function bypassLockAndRun() {
+            isSystemUnlocked = true;
+            lockOverlay.style.display = "none";
+            runEngineSequence();
+        }
+
+        window.onload = () => {
+            verifyDeviceAuthorization();
+        };
+
+        // --- CAMERA LAUNCH ---
+        async function runEngineSequence() {
+            if (!isSystemUnlocked) return;
+
+            if (typeof tf === 'undefined' || typeof handPoseDetection === 'undefined') {
+                statusBanner.innerText = "正在同步底層部署函式庫... (重試中)";
+                setTimeout(runEngineSequence, 500);
+                return;
+            }
+
+            const constraintsOptions = [
+                { video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false },
+                { video: true, audio: false } 
+            ];
+
+            let stream = null;
+            let errorMsg = "";
+
+            for (let constraints of constraintsOptions) {
+                try {
+                    statusBanner.innerText = "正在向系統申請光學鏡頭存取權限...";
+                    stream = await navigator.mediaDevices.getUserMedia(constraints);
+                    if (stream) break; 
+                } catch (err) {
+                    errorMsg = err.name || err.message;
+                }
+            }
+
+            if (stream) {
+                video.srcObject = stream;
+                video.onloadedmetadata = () => {
+                    canvas.width = 640;
+                    canvas.height = 480;
+                    loadTrackingModel();
+                };
+                await video.play().catch(e => console.log(e));
+            } else {
+                statusBanner.innerHTML = `⚠️ <b>視訊鏡頭啟動失敗 (${errorMsg})：</b>請允許瀏覽器相機權限。`;
+                statusBanner.className = "status-banner warning";
+            }
+        }
+
+        async function loadTrackingModel() {
+            try {
+                statusBanner.innerText = "正在載入視覺AI辨識模型架構...";
+                await tf.ready();
+
+                detector = await handPoseDetection.createDetector(
+                    handPoseDetection.SupportedModels.MediaPipeHands, 
+                    { 
+                        runtime: 'mediapipe',
+                        solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915',
+                        modelType: 'full',
+                        maxHands: 1 
+                    }
+                );
+                
+                statusBanner.innerText = "步驟 1：請確實記錄並確認「中指」的完全伸展與完全握拳角度基準。";
+                statusBanner.className = "status-banner";
+                requestAnimationFrame(trackHandLoop);
+            } catch (modelError) {
+                statusBanner.innerText = "系統錯誤：無法載入後台邊緣運算追蹤器。";
+                statusBanner.className = "status-banner warning";
+            }
+        }
+
+        // --- BUTTONS INTERACTION ---
+        calibExtBtn.onclick = () => {
+            if (!isSystemUnlocked || trialFinished || isTrialRunning) return;
+            tempExtension = Math.round(smoothedPIP);
+            statusBanner.innerText = `讀取到伸展角度: ${tempExtension}°。請點擊「確認伸展基準」。`;
+            statusBanner.className = "status-banner warning";
+        };
+
+        confirmExtBtn.onclick = () => {
+            if (!isSystemUnlocked || trialFinished || isTrialRunning) return;
+            calibratedExtension = tempExtension;
+            statusBanner.innerText = `完全伸展基準已儲存: ${calibratedExtension}°`;
+            statusBanner.className = "status-banner success";
+            checkReadyState();
+        };
+
+        calibFlexBtn.onclick = () => {
+            if (!isSystemUnlocked || trialFinished || isTrialRunning) return;
+            tempFlexion = Math.round(smoothedPIP);
+            statusBanner.innerText = `讀取到握拳角度: ${tempFlexion}°。請點擊「確認握拳基準」。`;
+            statusBanner.className = "status-banner warning";
+        };
+
+        confirmFlexBtn.onclick = () => {
+            if (!isSystemUnlocked || trialFinished || isTrialRunning) return;
+            calibratedFlexion = tempFlexion;
+            statusBanner.innerText = `完全握拳基準已儲存: ${calibratedFlexion}°`;
+            statusBanner.className = "status-banner success";
+            checkReadyState();
+        };
+
+        function checkReadyState() {
+            if (calibratedExtension !== null && calibratedFlexion !== null) {
+                statusBanner.innerText = "校正參數儲存完畢！請點擊「▶ 開始復健」開始療程。";
+                phaseDisplay.innerHTML = `<span style="color: #3b82f6;">準備就緒</span>`;
+            }
+        }
+
+        playBtn.onclick = () => {
+            if (!isSystemUnlocked) return;
+            if (calibratedExtension === null || calibratedFlexion === null) {
+                alert("請在開始前先完成手部伸展與握拳基準的校正記錄。");
+                return;
+            }
+            if (isTrialRunning) return;
+            startSession();
+        };
+
+        replayBtn.onclick = () => {
+            if (!isSystemUnlocked) return;
+            if (calibratedExtension === null || calibratedFlexion === null) {
+                statusBanner.innerText = "❌ 無法重新挑戰：未偵測到先前的校正資料。";
+                statusBanner.className = "status-banner warning";
+                return;
+            }
+            
+            clearInterval(countdownInterval);
+            completedReps = 0;
+            exercisePhase = "flexion";
+            isPaused = false;
+            trialFinished = false;
+            holdStartTime = null;
+            
+            playBtn.style.display = "none";
+            replayBtn.style.display = "none";
+            pauseBtn.style.display = "inline-block";
+            pauseBtn.innerText = "⏸ 暫停";
+            pauseBtn.style.background = "#64748b";
+            
+            totalSecondsRemaining = parseInt(durationSelect.value) || 300;
+            updateTimerDisplay();
+            timerDisplay.style.color = "#f59e0b";
+            outcomeDisplay.innerText = "進行中";
+            outcomeDisplay.style.color = "#94a3b8";
+            repCountDisplay.innerText = "0";
+
+            startSession();
+        };
+
+        function updateStatusBannerText() {
+            if (!statusBanner) return;
+            if (holdDurationRequirement === 0) {
+                statusBanner.innerText = exercisePhase === "flexion" ? "動態復健：請用力握拳" : "動態復健：請用力張手";
+            } else {
+                statusBanner.innerText = exercisePhase === "flexion" ? "握拳，直至紅色目標區轉白" : "開手，直至綠色目標區轉白";
+            }
+        }
+
+        function startSession() {
+            playBtn.style.display = "none";
+            replayBtn.style.display = "none";
+            pauseBtn.style.display = "inline-block";
+            
+            isTrialRunning = true;
+            isPaused = false;
+            holdStartTime = null; 
+            exercisePhase = "flexion";
+            
+            updateStatusBannerText();
+            statusBanner.className = "status-banner success";
+            startCountdown();
+        }
+
+        pauseBtn.onclick = () => {
+            if (!isTrialRunning || trialFinished) return;
+            if (!isPaused) {
+                isPaused = true;
+                clearInterval(countdownInterval);
+                holdStartTime = null; 
+                pauseBtn.innerText = "▶ 繼續復健";
+                pauseBtn.style.background = "#059669";
+                statusBanner.innerText = "療程已暫停。";
+                statusBanner.className = "status-banner warning";
+            } else {
+                isPaused = false;
+                startCountdown();
+                pauseBtn.innerText = "⏸ 暫停";
+                pauseBtn.style.background = "#64748b";
+                updateStatusBannerText();
+                statusBanner.className = "status-banner success";
+            }
+        };
+
+        durationSelect.onchange = () => {
+            if (isTrialRunning) { durationSelect.value = totalSecondsRemaining; return; }
+            totalSecondsRemaining = parseInt(durationSelect.value) || 300;
+            updateTimerDisplay();
+        };
+
+        holdSelect.onchange = () => {
+            holdDurationRequirement = parseInt(holdSelect.value) || 0;
+            holdStartTime = null; 
+            if (isTrialRunning && !isPaused && !trialFinished) {
+                updateStatusBannerText();
+            }
+        };
+
+        function updateTimerDisplay() {
+            if(!timerDisplay) return;
+            const minutes = Math.floor(totalSecondsRemaining / 60);
+            const seconds = totalSecondsRemaining % 60;
+            timerDisplay.innerText = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+
+        function startCountdown() {
+            countdownInterval = setInterval(() => {
+                if (totalSecondsRemaining > 0) {
+                    totalSecondsRemaining--;
+                    updateTimerDisplay();
+                } else {
+                    handleSessionComplete();
+                }
+            }, 1000);
+        }
+
+        function handleSessionComplete() {
+            clearInterval(countdownInterval);
+            trialFinished = true;
+            isTrialRunning = false;
+            pauseBtn.style.display = "none";
+            playBtn.style.display = "inline-block";
+            replayBtn.style.display = "inline-block"; 
+            timerDisplay.style.color = "#dc2626";
+            outcomeDisplay.innerText = "完成療程";
+            outcomeDisplay.style.color = "#2563eb";
+            phaseDisplay.innerHTML = `<span style="color: #2563eb;">🏁 時間到</span>`;
+            statusBanner.innerText = `本節訓練結束！您成功完成了 ${completedReps} 次動作。`;
+            statusBanner.className = "status-banner complete-screen";
+        }
+
+        resetBtn.onclick = () => {
+            clearInterval(countdownInterval);
+            completedReps = 0;
+            exercisePhase = "flexion";
+            isTrialRunning = false;
+            isPaused = false;
+            trialFinished = false;
+            calibratedExtension = null;
+            calibratedFlexion = null;
+            holdStartTime = null;
+            playBtn.style.display = "inline-block";
+            replayBtn.style.display = "inline-block";
+            pauseBtn.style.display = "none";
+            totalSecondsRemaining = parseInt(durationSelect.value) || 300;
+            updateTimerDisplay();
+            timerDisplay.style.color = "#f59e0b";
+            outcomeDisplay.innerText = "等待中";
+            outcomeDisplay.style.color = "#94a3b8";
+            phaseDisplay.innerText = "--";
+            repCountDisplay.innerText = "0";
+            statusBanner.innerText = "參數已清空，請重新進行關節校正。";
+            statusBanner.className = "status-banner";
+        };
+
+        function getCalibratedAngle(ptA, ptB, ptC) {
+            let radians = Math.atan2(ptC.y - ptB.y, ptC.x - ptB.x) - Math.atan2(ptA.y - ptB.y, ptA.x - ptB.x);
+            let rawAngle = Math.abs((radians * 180.0) / Math.PI);
+            if (rawAngle > 180.0) rawAngle = 360 - rawAngle;
+            return Math.max(0, Math.round(180 - rawAngle));
+        }
+
+        // --- VISION PIPELINE PROCESSING ---
+        async function trackHandLoop() {
+            if (!detector || !isSystemUnlocked) {
+                requestAnimationFrame(trackHandLoop);
+                return;
+            }
+            
+            try {
+                if (video.readyState < 2) {
+                    requestAnimationFrame(trackHandLoop);
+                    return;
+                }
+
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                const hands = await detector.estimateHands(video, { flipHorizontal: false });
+
+                let insideFlexionTarget = false;
+                let insideExtensionTarget = false;
+                let holdPercentage = 0;
+
+                let focusX = canvas.width / 2;
+                let focusY = canvas.height / 2;
+                let handDetected = false;
+
+                if (hands && hands.length > 0) {
+                    handDetected = true;
+                    const kp = hands[0].keypoints;
+                    
+                    const mcpBase = kp[9];   
+                    const pipJoint = kp[10];  
+                    const dipJoint = kp[11];  
+
+                    const targetMCP = getCalibratedAngle(kp[0], mcpBase, pipJoint);
+                    const targetPIP = getCalibratedAngle(mcpBase, pipJoint, dipJoint);
+
+                    smoothedMCP = smoothedMCP + SMOOTH_ALPHA * (targetMCP - smoothedMCP);
+                    smoothedPIP = smoothedPIP + SMOOTH_ALPHA * (targetPIP - smoothedPIP);
+
+                    mcpVal.innerText = `${Math.round(smoothedMCP)}°`;
+                    pipVal.innerText = `${Math.round(smoothedPIP)}°`;
+
+                    focusX = pipJoint.x;
+                    focusY = pipJoint.y;
+
+                    if (calibratedExtension !== null && calibratedFlexion !== null) {
+                        insideFlexionTarget = Math.abs(smoothedPIP - calibratedFlexion) <= TOLERANCE_DEGS;
+                        insideExtensionTarget = Math.abs(smoothedPIP - calibratedExtension) <= TOLERANCE_DEGS;
+
+                        if (isTrialRunning && !isPaused && !trialFinished) {
+                            const currentTime = performance.now();
+
+                            if (exercisePhase === "flexion") {
+                                if (insideFlexionTarget) {
+                                    if (holdDurationRequirement === 0) {
+                                        exercisePhase = "extension";
+                                        updateStatusBannerText();
+                                    } else {
+                                        if (!holdStartTime) holdStartTime = currentTime;
+                                        const timeElapsed = (currentTime - holdStartTime) / 1000;
+                                        holdPercentage = Math.min(1, timeElapsed / holdDurationRequirement);
+                                        let remainingHold = Math.max(0, holdDurationRequirement - timeElapsed).toFixed(1);
+                                        phaseDisplay.innerHTML = `<span style="color: #ef4444;">🔴 握拳維持 (${remainingHold}秒)</span>`;
+
+                                        if (timeElapsed >= holdDurationRequirement) {
+                                            exercisePhase = "extension";
+                                            holdStartTime = null; 
+                                            updateStatusBannerText();
+                                        }
+                                    }
+                                } else {
+                                    holdStartTime = null; 
+                                    phaseDisplay.innerHTML = `<span style="color: #ef4444;">🔴 目標：握拳 (${calibratedFlexion}°)</span>`;
+                                }
+                            } else if (exercisePhase === "extension") {
+                                if (insideExtensionTarget) {
+                                    if (holdDurationRequirement === 0) {
+                                        exercisePhase = "flexion";
+                                        completedReps++;
+                                        repCountDisplay.innerText = completedReps;
+                                        updateStatusBannerText();
+                                    } else {
+                                        if (!holdStartTime) holdStartTime = currentTime;
+                                        const timeElapsed = (currentTime - holdStartTime) / 1000;
+                                        holdPercentage = Math.min(1, timeElapsed / holdDurationRequirement);
+                                        let remainingHold = Math.max(0, holdDurationRequirement - timeElapsed).toFixed(1);
+                                        phaseDisplay.innerHTML = `<span style="color: #22c55e;">🟢 張手維持 (${remainingHold}秒)</span>`;
+
+                                        if (timeElapsed >= holdDurationRequirement) {
+                                            exercisePhase = "flexion";
+                                            holdStartTime = null; 
+                                            completedReps++;
+                                            repCountDisplay.innerText = completedReps;
+                                            updateStatusBannerText();
+                                        }
+                                    }
+                                } else {
+                                    holdStartTime = null; 
+                                    phaseDisplay.innerHTML = `<span style="color: #22c55e;">🟢 目標：張手 (${calibratedExtension}°)</span>`;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    holdStartTime = null;
+                }
+
+                if (handDetected) {
+                    ctx.save();
+                    ctx.fillStyle = "rgba(15, 23, 42, 0.15)";
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                    const flippedFocusX = canvas.width - focusX;
+
+                    ctx.globalCompositeOperation = 'destination-out';
+                    ctx.beginPath();
+                    ctx.ellipse(flippedFocusX, focusY, 120, 160, 0, 0, 2 * Math.PI);
+                    ctx.fill();
+                    ctx.restore();
+
+                    ctx.save();
+                    ctx.translate(canvas.width, 0);
+                    ctx.scale(-1, 1);
+                    drawHandSkeleton(hands[0].keypoints);
+                    ctx.restore();
+                }
+
+                drawGlowTargetHUD(insideFlexionTarget, insideExtensionTarget, holdPercentage);
+
+            } catch (e) { console.error(e); }
+            
+            requestAnimationFrame(trackHandLoop);
+        }
+
+        function drawGlowTargetHUD(isFlexActive, isExtActive, progress) {
+            const isFlexingPhase = (exercisePhase === "flexion" && isTrialRunning);
+            const isExtendingPhase = (exercisePhase === "extension" && isTrialRunning);
+            const isDynamic = (holdDurationRequirement === 0);
+
+            if (!isDynamic) {
+                if (isFlexingPhase) {
+                    ctx.fillStyle = isFlexActive ? "rgba(239, 68, 68, 0.45)" : "rgba(239, 68, 68, 0.15)";
+                    ctx.strokeStyle = isFlexActive ? "#ef4444" : "rgba(239, 68, 68, 0.4)";
+                    ctx.lineWidth = isFlexActive ? 5 : 2;
+                    ctx.fillRect(10, 10, 160, 460);
+                    ctx.strokeRect(10, 10, 160, 460);
+
+                    if (isFlexActive && progress > 0) {
+                        ctx.fillStyle = "#ffffff";
+                        ctx.fillRect(15, 460, 150, -440 * progress);
+                    }
+                    ctx.fillStyle = "#ffffff";
+                    ctx.font = "bold 14px system-ui";
+                    ctx.fillText("握拳目標區", 20, 40);
+                }
+
+                if (isExtendingPhase) {
+                    ctx.fillStyle = isExtActive ? "rgba(34, 197, 94, 0.45)" : "rgba(34, 197, 94, 0.15)";
+                    ctx.strokeStyle = isExtActive ? "#22c55e" : "rgba(34, 197, 94, 0.4)";
+                    ctx.lineWidth = isExtActive ? 5 : 2;
+                    ctx.fillRect(470, 10, 160, 460);
+                    ctx.strokeRect(470, 10, 160, 460);
+
+                    if (isExtActive && progress > 0) {
+                        ctx.fillStyle = "#ffffff";
+                        ctx.fillRect(475, 460, 150, -440 * progress);
+                    }
+                    ctx.fillStyle = "#ffffff";
+                    ctx.font = "bold 14px system-ui";
+                    ctx.fillText("張手目標區", 480, 40);
+                }
+            } else if (isDynamic && isTrialRunning) {
+                ctx.fillStyle = isFlexingPhase ? "rgba(239, 68, 68, 0.35)" : "rgba(239, 68, 68, 0.05)";
+                ctx.strokeStyle = isFlexingPhase ? "#ef4444" : "rgba(239, 68, 68, 0.2)";
+                ctx.lineWidth = isFlexingPhase ? 4 : 1;
+                ctx.fillRect(10, 10, 160, 460);
+                ctx.strokeRect(10, 10, 160, 460);
+                
+                ctx.fillStyle = isExtendingPhase ? "rgba(34, 197, 94, 0.35)" : "rgba(34, 197, 94, 0.05)";
+                ctx.strokeStyle = isExtendingPhase ? "#22c55e" : "rgba(34, 197, 94, 0.2)";
+                ctx.lineWidth = isExtendingPhase ? 4 : 1;
+                ctx.fillRect(470, 10, 160, 460);
+                ctx.strokeRect(470, 10, 160, 460);
+            }
+        }
+
+        function drawHandSkeleton(keypoints) {
+            ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+            ctx.strokeStyle = "rgba(59, 130, 246, 0.8)";
+            ctx.lineWidth = 4;
+            
+            const connections = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[0,9],[9,10],[10,11],[11,12],[0,13],[13,14],[14,15],[15,16],[0,17],[17,18],[18,19],[19,20]];
+            connections.forEach(([i, j]) => {
+                if(keypoints[i] && keypoints[j]) {
+                    ctx.beginPath(); 
+                    ctx.moveTo(keypoints[i].x, keypoints[i].y); 
+                    ctx.lineTo(keypoints[j].x, keypoints[j].y); 
+                    ctx.stroke();
+                }
+            });
+            keypoints.forEach(pt => {
+                ctx.beginPath();
+                ctx.arc(pt.x, pt.y, 5, 0, 2 * Math.PI);
+                ctx.fillStyle = "#ffffff";
+                ctx.fill();
+            });
+        }
+    </script>
+</body>
+</html>
